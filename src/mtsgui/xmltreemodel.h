@@ -21,7 +21,8 @@
 
 #include "common.h"
 #include <QtXml/QtXml>
-
+#include <map>
+#include <string>
 /**
  * Simplistic tree item used in the XML widget -- used to
  * store (key, value) pairs and categories.
@@ -54,11 +55,14 @@ public:
     void setProperties(const Properties &props);
     void setProperty(const std::string &name, const Properties &props);
     void putProperties(Properties &props) const;
+    std::map<std::string, Properties::EPropertyType>& getRealTypes();
+    const std::map<std::string, Properties::EPropertyType>& getRealTypes() const;
 private:
     QList<TreeItem*> m_childItems;
     QString m_itemName, m_readableName;
     QVariant m_itemValue, m_itemDefault;
     QString m_toolTip;
+    std::map<std::string, Properties::EPropertyType> m_realTypes;
     TreeItem *m_parentItem;
     int m_importance;
 };

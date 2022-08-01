@@ -97,7 +97,12 @@ bool TreeItem::setData(int column, const QVariant &value) {
     m_itemValue = value;
     return true;
 }
-
+std::map<std::string, Properties::EPropertyType>& TreeItem::getRealTypes(){
+    return m_realTypes;
+}
+const std::map<std::string, Properties::EPropertyType>& TreeItem::getRealTypes() const{
+    return m_realTypes;
+}
 void TreeItem::setProperty(const std::string &name, const Properties &props) {
     QVariant data;
     switch (props.getType(name)) {
@@ -110,8 +115,17 @@ void TreeItem::setProperty(const std::string &name, const Properties &props) {
         case Properties::EFloat:
             data = QVariant((double) props.getFloat(name));
             break;
-        case Properties::EString:
+        case Properties::EString: 
             data = QVariant(props.getString(name).c_str());
+            break;
+        case Properties::ESpectrum:
+            {
+                auto& color = props.getSpectrum(name);
+                char buf[16];
+                std::sprintf(buf,"%.2lf,%.2lf,%.2lf",color[0],color[1],color[2]);
+                data = QVariant(QString(buf));
+                m_realTypes[props.getPluginName()+name]=Properties::ESpectrum;
+            }
             break;
         default:
             SLog(EError, "TreeItem::getProperties(): \"%s\": Unable to handle elements of type %i",
@@ -152,11 +166,29 @@ void TreeItem::putProperties(Properties &props) const {
             case QVariant::Int:
                 props.setInteger(name, value.toInt());
                 break;
-            case QVariant::Double:
+            case QVariant::Double:         
                 props.setFloat(name, (Float) value.toDouble());
                 break;
             case QVariant::String:
-                props.setString(name, value.toString().toStdString());
+                {
+                    auto iter = m_realTypes.find(props.getPluginName()+name);
+                    if(iter!=m_realTypes.end()){
+                        if(iter->second==Properties::ESpectrum){
+                            auto v=value.toString().toStdString();
+                            std::istringstream is(v);
+                            Spectrum color;
+                            std::string skip;
+                            is>>color[0];
+                            is.ignore(v.size(),',');
+                            is>>color[1];
+                            is.ignore(v.size(),',');
+                            is>>color[2];
+                            props.setSpectrum(name, color);
+                        }
+                    }else{
+                        props.setString(name, value.toString().toStdString());
+                    }
+                }
                 break;
             case QVariant::Bool:
                 props.setBoolean(name, value.toBool());
@@ -280,6 +312,13 @@ void XMLTreeModel::populate(const QString &className, TreeItem *parent) {
                 variantValue = QVariant(false);
             else
                 ok = false;
+        } else if(type == "rgb") {
+            // float x,y,z;
+            // std::string str = value.toStdString();
+            // sscanf(str.c_str(),"%f,%f,%f",&x,&y,&z);
+            // variantValue = QVariant(QVector3D(x,y,z));
+            parent->getRealTypes()[plugin.attribute("name").toStdString()+name.toStdString()]=Properties::ESpectrum;
+            variantValue = QVariant(value);
         } else {
             SLog(EError, "Unexpected property type!");
         }

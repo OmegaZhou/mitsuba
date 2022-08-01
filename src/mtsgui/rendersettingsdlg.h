@@ -63,6 +63,9 @@ protected slots:
 protected:
     void changeEvent(QEvent *e);
     void setDocumentation(const QString &text);
+    std::vector<const BSDF*> getBsdfs(const Scene * scene);
+    const BSDF* getBsdf(const Scene * scene);
+    void updateBsdf(Scene* scene,const BSDF* old, ref<BSDF> bsdf);
     QStringList validateConfiguration() const;
 private:
     Ui::RenderSettingsDialog *ui;
@@ -71,6 +74,7 @@ private:
     TreeItem *m_integratorNode, *m_samplerNode;
     TreeItem *m_rFilterNode, *m_icNode;
     TreeItem *m_aiNode;
+    TreeItem *m_bsdfNode;
     QString m_originalResolution;
     QString m_currentDocumentation;
     QStringList m_statusMessages;

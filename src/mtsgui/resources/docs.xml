@@ -1,5 +1,19 @@
 <?xml version="1.0"?>
 <documentation version="2.0.2">
+    <plugin type="bsdf" className="MarschnerBSDF" show="true" readableName="Marschner BSDF" name="marschner_bsdf">
+        <shortDescr>MarschnerBSDF</shortDescr>
+        <descr>MarschnerBSDF</descr>
+        <param name="sigmaA" readableName="sigmaA" type="rgb" default="0,0,0"/>
+		<param name="eta" readableName="eta" type="float" default="1.7"/>
+		<param name="alpha" readableName="alpha" type="float" default="-5"/>
+		<param name="beta" readableName="beta" type="float" default="5"/>
+		<param name="Kg" readableName="Kg" type="float" default="0.5"/>
+		<param name="wc" readableName="wc" type="float" default="10"/>
+		<param name="radius" readableName="radius" type="float" default="0.05"/>
+        <param name="deltaEta" readableName="deltaEta" type="float" default="0.2"/>
+        <param name="deltaHm" readableName="deltaHm" type="float" default="0.5"/>
+        <param name="itemFilter" readableName="itemFilter" type="integer" default="7"/>
+    </plugin>
     <plugin type="integrator" className="SampleIntegrator" abstract="true">
         <shortDescr>Base class of all sampling-based integrators</shortDescr>
         <descr>Base class of all sampling-based integrators</descr>

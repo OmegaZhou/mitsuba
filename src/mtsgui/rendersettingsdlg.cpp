@@ -154,6 +154,8 @@ RenderSettingsDialog::RenderSettingsDialog(QWidget *parent) :
                 ui->samplerBox->addItem(readableName, list);
             else if (type == "rfilter")
                 ui->rFilterBox->addItem(readableName, list);
+            else if (type == "bsdf")
+                ui->bsdfBox->addItem(readableName, list);
         }
         if (name == "irrcache")
             ui->icBox->setProperty("help", docString);
@@ -174,6 +176,7 @@ RenderSettingsDialog::RenderSettingsDialog(QWidget *parent) :
     m_integratorNode = m_model->registerClass("MIPathTracer", "Path tracer");
     m_samplerNode = m_model->registerClass("IndependentSampler", "Independent sampler");
     m_rFilterNode = m_model->registerClass("BoxFilter", "Box filter");
+    m_bsdfNode = m_model->registerClass("MarschnerBSDF", "Marschner BSDF");
     QRegExp resRegExp("^[1-9]\\d{0,4}x[1-9]\\d{0,4}$");
     ui->resolutionBox->setValidator(new QRegExpValidator(resRegExp, this));
     QPalette pal = ui->helpViewer->palette();
@@ -275,7 +278,10 @@ void RenderSettingsDialog::update() {
     m_rFilterNode = m_model->updateClass(m_rFilterNode,
         ui->rFilterBox->itemData(index).toList().at(0).toString(),
         ui->rFilterBox->itemText(index));
-
+    index = ui->bsdfBox->currentIndex();
+    m_bsdfNode = m_model->updateClass(m_bsdfNode,
+        ui->bsdfBox->itemData(index).toList().at(0).toString(),
+        ui->bsdfBox->itemText(index));
     if (ui->icBox->isChecked()) {
         m_icNode = m_model->updateClass(m_icNode,
             "IrradianceCacheIntegrator", tr("Irradiance Cache"));
@@ -345,13 +351,47 @@ void RenderSettingsDialog::refresh() {
 
     ui->buttonBox->button(QDialogButtonBox::Ok)->setEnabled(valid);
 }
-
+std::vector<const BSDF*> RenderSettingsDialog::getBsdfs(const Scene * scene){
+    std::vector<const BSDF*>  ret;
+    auto& objects = scene->getReferencedObjects();
+    for(auto& object:objects){
+        if(object.get()->getClass()->derivesFrom(BSDF::m_theClass)){
+            ret.push_back(static_cast<const BSDF*>(object.get()));
+        }
+    }
+    return ret;
+}
+const BSDF* RenderSettingsDialog::getBsdf(const Scene *scene){
+    auto& objects = scene->getReferencedObjects();
+    for(auto& object:objects){
+        if(object.get()->getClass()->derivesFrom(BSDF::m_theClass)){
+            return static_cast<const BSDF*>(object.get());
+        }
+    }
+    return nullptr;
+}
+void RenderSettingsDialog::updateBsdf(Scene* scene,const BSDF* old, ref<BSDF> bsdf)
+{
+    auto& objects = scene->getReferencedObjects();
+    for(auto& object : objects){
+        if(object.get()==old){
+            object = bsdf;
+        }
+    }
+    auto& shapes = scene->getShapes();
+    for(auto& shape : shapes){
+        if(shape->getBSDF()==old){
+            shape->setBSDF(bsdf);
+        }
+    }
+}
 void RenderSettingsDialog::load(const SceneContext *ctx) {
     const Scene *scene = ctx->scene.get();
     const Film *film = scene->getFilm();
     const Properties &rFilterProps = film->getReconstructionFilter()->getProperties();
     const Properties &samplerProps = scene->getSampler()->getProperties();
     const Integrator *integrator = scene->getIntegrator();
+    const BSDF* bsdf = getBsdf(scene);
     Properties integratorProps = integrator->getProperties();
 
     if (integratorProps.getPluginName() == "adaptive") {
@@ -375,11 +415,17 @@ void RenderSettingsDialog::load(const SceneContext *ctx) {
     setComboBox(ui->integratorBox, integratorProps.getPluginName());
     setComboBox(ui->rFilterBox, rFilterProps.getPluginName());
     setComboBox(ui->samplerBox, samplerProps.getPluginName());
+    if(bsdf){
+        setComboBox(ui->bsdfBox, bsdf->getProperties().getPluginName());
+    }
     update();
 
     m_model->setProperties(m_rFilterNode, rFilterProps);
     m_model->setProperties(m_samplerNode, samplerProps);
     m_model->setProperties(m_integratorNode, integratorProps);
+    if(bsdf){
+        m_model->setProperties(m_bsdfNode, bsdf->getProperties());
+    }
 
     /* Make comboboxes etc editable by default */
     int row = 0;
@@ -409,7 +455,7 @@ void RenderSettingsDialog::apply(SceneContext *ctx) {
     Film *oldFilm = oldSensor->getFilm();
     Properties filmProps = oldSensor->getFilm()->getProperties();
     ref<PluginManager> pluginMgr = PluginManager::getInstance();
-
+    const BSDF* oldBsdf = getBsdf(scene);
     /* Temporarily set up a new file resolver */
     ref<Thread> thread = Thread::getThread();
     ref<FileResolver> oldResolver = thread->getFileResolver();
@@ -440,6 +486,13 @@ void RenderSettingsDialog::apply(SceneContext *ctx) {
     ref<Integrator> integrator = static_cast<Integrator *>
         (pluginMgr->createObject(MTS_CLASS(Integrator), integratorProps));
     integrator->configure();
+
+    Properties bsdfProps(getPluginName(ui->bsdfBox));
+    if (m_bsdfNode != NULL)
+        m_bsdfNode->putProperties(bsdfProps);
+    ref<BSDF> bsdf = static_cast<BSDF *>
+        (pluginMgr->createObject(MTS_CLASS(BSDF), bsdfProps));
+    bsdf->configure();
 
     if (ui->icBox->isChecked()) {
         Properties icProps("irrcache");
@@ -527,6 +580,7 @@ void RenderSettingsDialog::apply(SceneContext *ctx) {
     newSensor->configure();
 
     /* Update the scene with the newly constructed elements */
+    updateBsdf(scene,oldBsdf, bsdf);
     scene->removeSensor(oldSensor);
     scene->addSensor(newSensor);
     scene->setSensor(newSensor);

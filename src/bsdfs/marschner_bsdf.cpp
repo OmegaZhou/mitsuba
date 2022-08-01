@@ -4,7 +4,6 @@
 #include <mitsuba/core/warp.h>
 #include <random>
 MTS_NAMESPACE_BEGIN
-
 class GaussianFunction 
 {
 public:
@@ -55,23 +54,71 @@ class MarschnerBSDF : public BSDF
 public:
 	MarschnerBSDF(const Properties& props) : BSDF(props)
 	{
-		alpha[0] = props.getFloat("alpha", -5) * M_PI / 180;
-		alpha[1] = -alpha[0] / 2;
-		alpha[2] = -3 * alpha[0] * 2;
-		beta[0] = props.getFloat("beta", 5) * M_PI / 180;
-		beta[1] = beta[0] / 2;
-		beta[2] = beta[0] * 2;
+		m_alpha[0] = props.getFloat("alpha", -5) * M_PI / 180;
+		m_alpha[1] = -m_alpha[0] / 2;
+		m_alpha[2] = -3 * m_alpha[0] * 2;
+		m_beta[0] = props.getFloat("beta", 5) * M_PI / 180;
+		m_beta[1] = m_beta[0] / 2;
+		m_beta[2] = m_beta[0] * 2;
 		//beta[1] = 6 * M_PI / 180;
 		//beta[2] = 15 * M_PI / 180;
 
-		props.getSpectrum("sigmaA", Spectrum(0.0f)).toLinearRGB(sigma_a.x, sigma_a.y, sigma_a.z);
-		deltaHm = props.getFloat("deltaHm", 0.5f);
-		wc = props.getFloat("wc", 10) * M_PI / 180;
-		kg = props.getFloat("Kg", 0.5f);
-		deltaEta = props.getFloat("deltaEta", 0.2f);
-		eta = props.getFloat("eta", 1.7f);
-		radius = props.getFloat("radius", 0.05f);
-		Log(ELogLevel::EDebug, "%lf %lf %lf", sigma_a.x, sigma_a.y, sigma_a.z);
+		props.getSpectrum("sigmaA", Spectrum(0.0f)).toLinearRGB(m_sigmaA.x, m_sigmaA.y, m_sigmaA.z);
+		m_deltaHm = props.getFloat("deltaHm", 0.5f);
+		m_wc = props.getFloat("wc", 10) * M_PI / 180;
+		m_kg = props.getFloat("Kg", 0.5f);
+		m_deltaEta = props.getFloat("deltaEta", 0.2f);
+		m_eta = props.getFloat("eta", 1.7f);
+		m_radius = props.getFloat("radius", 0.05f);
+		m_filter = props.getInteger("itemFilter", 7);
+		Log(ELogLevel::EDebug, "%lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf", m_sigmaA.x, m_sigmaA.y, m_sigmaA.z, m_deltaHm, m_wc, m_kg, m_deltaEta,m_eta,m_radius,m_alpha[0],m_beta[0]);
+		for(float phi=-M_PI;phi<=M_PI;phi+=0.01){
+			auto r = Np(0, phi, 0);
+			Log(ELogLevel::EDebug, "Phi %lf, R: %lf %lf %lf", phi * INV_PI * 180, r[0], r[1], r[2]);
+			auto hs = calculateH(phi, 0, m_eta);
+			for (int i = 0; i < hs.size(); ++i) {
+				Log(ELogLevel::EDebug, "H %d %lf", i, hs[i]);
+			}
+			
+		}
+		for (float phi = -M_PI; phi <= M_PI; phi += 0.01) {
+			auto tt = Np(1, phi, 0);
+			Log(ELogLevel::EDebug, "Phi %lf, TT: %lf %lf %lf", phi * INV_PI * 180, tt[0], tt[1], tt[2]);
+			auto hs = calculateH(phi, 1, m_eta);
+			for (int i = 0; i < hs.size(); ++i) {
+				Log(ELogLevel::EDebug, "H %d %lf", i, hs[i]);
+			}
+		}
+		for (float phi = -M_PI; phi <= M_PI; phi += 0.01) {
+			auto trt = Np(2, phi, 0);
+			Log(ELogLevel::EDebug, "Phi %lf, TRT: %lf %lf %lf", phi * INV_PI * 180, trt[0], trt[1], trt[2]);
+			auto hs = calculateH(phi, 2, m_eta);
+			for (int i = 0; i < hs.size(); ++i) {
+				Log(ELogLevel::EDebug, "H %d %lf", i, hs[i]);
+			}
+		}
+		for (int i = 0; i < 3; ++i) {
+			m_maxPhi[i] = -1e5;
+			m_minPhi[i] = 1e5;
+		}
+		for (float gamma = -M_PI * 0.5; gamma < M_PI * 0.5; gamma += 0.01) {
+			float phi[3];
+			float h = sinf(gamma);
+			for (int i = 0; i < 3; ++i) {
+				phi[i] = 2 * i * asinf(h/m_eta) - 2 * gamma + i * M_PI;
+				m_maxPhi[i] = std::max(phi[i], m_maxPhi[i]);
+				m_minPhi[i] = std::min(phi[i], m_minPhi[i]);
+			}
+			//Log(ELogLevel::EDebug, "gamma %lf H %lf r %lf tt %lf trt %lf", gamma * INV_PI * 180, h, phi[0], phi[1], phi[2]);
+		}
+		//for (float h = -1; h <= 1; h+=0.01) {
+		//	auto f = fresnel(m_eta, m_eta, h);
+		//	auto f2 = fresnel(1 / m_eta, 1 / m_eta, h / m_eta);
+		//	auto r = f;
+		//	auto tt = (1 - f) * (1 - f2);
+		//	auto trt = (1 - f) * f2 * (1 - f2);
+		//	Log(ELogLevel::EDebug, "h: %lf r:%lf tt %lf trt %lf sum %lf ",h, r, tt, trt, r + tt + trt);
+		//}
 	}
 	MarschnerBSDF(Stream* stream, InstanceManager* manager): BSDF(stream, manager) 
 	{
@@ -79,7 +126,9 @@ public:
 	}
 	void configure()
 	{
-		m_components.push_back(EDiffuseReflection | EFrontSide);
+		m_components.push_back(EDiffuseReflection);
+		m_components.push_back(EDiffuseTransmission);
+		m_components.push_back(EFrontSide);
 		BSDF::configure();
 	}
 	virtual Spectrum eval(const BSDFSamplingRecord& bRec, EMeasure measure = ESolidAngle) const 
@@ -102,8 +151,8 @@ public:
 		//std::default_random_engine e;
 		//std::uniform_real_distribution<float> a(0, 1);
 		//int i = std::min(2.0f, std::floorf(3.0f * a(e)));
-		//std::normal_distribution<float> n(alpha[i], beta[i]);
-		//auto wi_geo = normalize(bRec.its.geoFrame.toLocal(normalize(bRec.its.toWorld(bRec.wi))));
+		//std::normal_distribution<float> n(m_alpha[i], m_beta[i]);
+
 		//float theta_h = n(e);
 		//float phi = 2 * M_PI * a(e);
 		//float theta_r = math::safe_asin(wi_geo.x);
@@ -117,11 +166,59 @@ public:
 		//bRec.wo.z = cos_theta * cos_phi;
 		////bRec.wo = warp::squareToUniformSphere(sample);
 		//bRec.wo = bRec.its.toLocal(bRec.its.geoFrame.toWorld(bRec.wo));
-		bRec.wo = warp::squareToUniformHemisphere(sample);
+		
+		//if (Frame::cosTheta(bRec.wi) < 0) {
+		//	bRec.wo = warp::squareToUniformHemisphere(sample);
+		//}
+		//else {
+		//	bRec.wo = warp::squareToUniformSphere(sample);
+		//	if (bRec.wo.z < 0) {
+		//		bRec.wo = -bRec.wi;
+		//	}
+		//}
+		bRec.wo = warp::squareToUniformSphere(sample);
 		bRec.eta = 1.0f;
 		bRec.sampledComponent = 0;
-		bRec.sampledType = EDiffuseReflection;
+		bRec.sampledType = EDiffuseReflection | EDiffuseTransmission;
 		pdf = this->pdf(bRec);
+		
+		//Float k = 0;
+		//for (int i = 0; i < 3; ++i) {
+		//	if (m_filter & (1 << i)) {
+		//		k += 1;
+		//	}
+		//}
+		//k = 1 / k;
+		//std::default_random_engine e;
+		//std::uniform_real_distribution<float> a(0, 1);
+		//Float tmp = a(e);
+		//int c = 0;
+		//Vector3 wo;
+		//for (int i = 0; i < 3; ++i) {
+		//	if (m_filter & (1 << i)) {
+		//		if (c * k < tmp) {
+		//			auto theta = sample.x * M_PI - 0.5 * M_PI;
+		//			auto sin_theta = sinf(theta);
+		//			auto cos_theta = std::sqrt(1 - sin_theta * sin_theta);
+		//			wo.x = sin_theta;
+		//			auto phi = samplePhi(i, sample.y);
+		//			auto sin_phi = sinf(phi);
+		//			auto cos_phi = cosf(phi);
+		//			auto wi_geo = normalize(bRec.its.geoFrame.toLocal(normalize(bRec.its.toWorld(bRec.wi))));
+		//			wo.y = wi_geo.z * sin_phi + wi_geo.y * cos_phi;
+		//			wo.z = wi_geo.z * cos_phi - wi_geo.y * sin_phi;
+		//			wo.y *= cos_theta;
+		//			wo.z *= cos_theta;
+		//			bRec.wo = bRec.its.toLocal(bRec.its.geoFrame.toWorld(wo));
+		//			break;
+		//		}
+		//		++c;
+		//	}
+		//}
+		//bRec.eta = 1.0f;
+		//bRec.sampledComponent = 0;
+		//bRec.sampledType = EDiffuseReflection | EDiffuseTransmission;
+		//pdf = this->pdf(bRec);
 		return bsdf(bRec);
 	}
 	virtual Float pdf(const BSDFSamplingRecord& bRec, EMeasure measure = ESolidAngle) const
@@ -136,27 +233,81 @@ public:
 		//theta_h = convertAngle(theta_h);
 		//Float pdf = 0;
 		//for (int i = 0; i < 3; ++i) {
-		//	pdf += GaussianFunction::getValue(theta_h - alpha[i], beta[i]);
+		//	pdf += GaussianFunction::getValue(theta_h - m_alpha[i], m_beta[i]);
 		//}
 		//pdf *=  INV_PI / 6;
-		//auto pdf = warp::squareToUniformSpherePdf();
-		auto pdf = warp::squareToUniformHemispherePdf();
+		
+		//Float pdf;
+		//if (Frame::cosTheta(bRec.wi) < 0) {
+		//	pdf = warp::squareToUniformHemispherePdf();
+		//}
+		//else {
+		//	if (bRec.wo.z < 0) {
+		//		pdf = 0.5f;
+		//	}
+		//	else {
+		//		pdf = warp::squareToUniformSpherePdf();
+		//	}
+		//}
+		auto pdf = warp::squareToUniformSpherePdf();
 		return pdf;
+		//Float pdf = 0;
+		//int c = 0;
+		//Vector3 wi = bRec.its.toWorld(bRec.wi);
+		//Vector3 wo = bRec.its.toWorld(bRec.wo);
+		//const Vector3& u = bRec.its.geoFrame.s;
+		//const Vector3& v = bRec.its.geoFrame.t;
+		//const Vector3& w = bRec.its.geoFrame.n;
+		//Float phi_i = math::safe_acos(dot(normalize(wi - dot(u, wi) * u), v)) * (dot(w, wi) > 0 ? 1 : -1);
+		//Float phi_r = math::safe_acos(dot(normalize(wo - dot(u, wo) * u), v)) * (dot(w, wo) > 0 ? 1 : -1);
+		//Float phi = phi_r - phi_i;
+		//phi = convertAngle(phi);
+		//for (int i = 0; i < 3; ++i) {
+		//	if (m_filter & (1 << i)) {
+		//		Float tmp = phi;
+		//		if (i == 1 && phi < 0) {
+		//			tmp += 2 * M_PI;
+		//		}
+		//		else if (i == 2) {
+		//			tmp += 2 * M_PI;
+		//		}
+		//		if (tmp > m_minPhi[i] && tmp < m_maxPhi[i]) {
+		//			pdf += 1 / (m_maxPhi[i] - m_minPhi[i]);
+		//		}
+		//		++c;
+		//	}
+		//}
+		//return pdf / M_PI / c;
 	}
 	MTS_DECLARE_CLASS()
 private:
 	// longitudinal width(stdev.)
-	Float beta[3];
+	Float m_beta[3];
 	//longitudinal shift
-	Float alpha[3];
+	Float m_alpha[3];
 	GaussianFunction g[3];
-	Float eta;
-	Vector3 sigma_a;
-	Float deltaHm;
-	Float wc;
-	Float kg;
-	Float deltaEta;
-	Float radius;
+	Float m_eta;
+	Vector3 m_sigmaA;
+	Float m_deltaHm;
+	Float m_wc;
+	Float m_kg;
+	Float m_deltaEta;
+	Float m_radius;
+	int m_filter;
+	Float m_minPhi[3], m_maxPhi[3];
+	Float samplePhi(int p, Float v) const{
+		return v * (m_maxPhi[p] - m_minPhi[p]) + m_minPhi[p];
+	}
+	Float sampleTheta(int p, Float v) const {
+		Float theta;
+		if (v < 0.5f) {
+			theta = math::fastlog(2 * v) * m_beta[p];
+		}
+		else {
+			theta = -math::fastlog(2 * (1 - v)) * m_beta[p];
+		}
+		return theta + m_alpha[p];
+	}
 	Float convertAngle(Float angle) const
 	{
 		while (angle < -M_PI) {
@@ -169,22 +320,37 @@ private:
 	}
 	Spectrum bsdf(const BSDFSamplingRecord& bRec) const
 	{
+		//return INV_PI*Spectrum(0.5f);
 		auto wi_geo = normalize(bRec.its.geoFrame.toLocal(normalize(bRec.its.toWorld(bRec.wi))));
 		auto wo_geo = normalize(bRec.its.geoFrame.toLocal(normalize(bRec.its.toWorld(bRec.wo))));
 		auto sin_thetai = wi_geo.x;
 		auto sin_thetao = wo_geo.x;
 
 		auto thetai = math::safe_asin(sin_thetai);
+		if (wi_geo.z < 0) {
+			thetai += M_PI;
+		}
 		auto thetao = math::safe_asin(sin_thetao);
+		if (wo_geo.z < 0) {
+			thetao += M_PI;
+		}
 		auto theta_d = (thetao - thetai) * 0.5f;
 		auto theta_h = (thetao + thetai) * 0.5f;
 
 		auto phi_vi = normalize(wi_geo - sin_thetai * Vector3(1, 0, 0));
 		auto phi_vo = normalize(wo_geo - sin_thetao * Vector3(1, 0, 0));
-		auto phi_i = math::safe_acos(phi_vi.z);
-		auto phi_o = math::safe_acos(phi_vi.z);
-		auto phi = phi_o - phi_i;
-		auto phi_h = (phi_i + phi_o) * 0.5f;
+		//auto phi_i = math::safe_acos(phi_vi.z);
+		//auto phi_o = math::safe_acos(phi_vo.z);
+		//auto phi = phi_o - phi_i;
+		Vector3 wi = bRec.its.toWorld(bRec.wi);
+		Vector3 wo = bRec.its.toWorld(bRec.wo);
+		const Vector3& u = bRec.its.geoFrame.s;
+		const Vector3& v = bRec.its.geoFrame.t;
+		const Vector3& w = bRec.its.geoFrame.n;
+		Float phi_i = math::safe_acos(dot(normalize(wi - dot(u, wi) * u), v)) * (dot(w, wi) > 0 ? 1 : -1);
+		Float phi_r = math::safe_acos(dot(normalize(wo - dot(u, wo) * u), v)) * (dot(w, wo) > 0 ? 1 : -1);
+		Float phi = phi_r - phi_i;
+		//Log(ELogLevel::EDebug, "phi %lf phi2 %lf", phi, phi2);
 		Float sin_theta_d = std::sin(theta_d);
 		Float cos_theta_d2 = 1 - sin_theta_d * sin_theta_d;
 		Spectrum ret(0.0f);
@@ -192,16 +358,18 @@ private:
 		theta_d = convertAngle(theta_d);
 		theta_h = convertAngle(theta_h);
 		for (int i = 0; i < 3; ++i) {
-			ret += M(i, theta_h) * Np(i, phi, sin_theta_d);
+			if ((1 << i) & m_filter) {
+				ret += M(i, theta_h) * Np(i, phi, sin_theta_d);
+			}
 			//ret = Np(1, phi, sin_theta_d);
 		}
 		//ret /= cos_theta_d2;
 		
-		return 2.0f * radius * ret;
+		return 2.0f * m_radius * ret;
 	}
 	Float M(int p, Float theta_h) const
 	{
-		return GaussianFunction::getValue(theta_h - alpha[p], beta[p]);
+		return GaussianFunction::getValue(theta_h - m_alpha[p], m_beta[p]);
 	}
 
 	Spectrum Np(int p, Float phi, Float sin_theta) const
@@ -220,32 +388,35 @@ private:
 				cache.push_back(ap);
 			}
 		}
+		//if (p == 1 && hs.size()) {
+		//	Log(ELogLevel::EDebug, "TT %lf %lf %lf", ret[0], ret[1], ret[2]);
+		//}
 
 		// Ntrt
 		if (p == 2) {
 
 			for (int i = 0; i < 3; ++i) {
-				ret[i] = std::isinf(ret[i]) ? 0 : ret[i];
+				ret[i] = std::isinf(ret[i]) ? 1 : ret[i];
 			}
 			Float hc, phic, deltaH, t;
 			if (eta1 < 2) {
 				getPhicAndHc(phic, hc, eta1);
-				deltaH = std::min(deltaHm, calcuteDeltaH(wc, hc, eta1));
+				deltaH = std::min(m_deltaHm, calcuteDeltaH(m_wc, hc, eta1));
 				t = 1;
 			}
 			else {
 				phic = 0;
-				deltaH = deltaHm;
-				t = 1 - smoothStep(2, 2 + deltaEta, eta1);
+				deltaH = m_deltaHm;
+				t = 1 - smoothStep(2, 2 + m_deltaEta, eta1);
 			}
 			phic = convertAngle(phic);
-			auto g0 = GaussianFunction::getValue(0, wc);
-			auto g1 = GaussianFunction::getValue(phi - phic, wc);
-			auto g2 = GaussianFunction::getValue(phi + phic, wc);
+			auto g0 = GaussianFunction::getValue(0, m_wc);
+			auto g1 = GaussianFunction::getValue(phi - phic, m_wc);
+			auto g2 = GaussianFunction::getValue(phi + phic, m_wc);
 			ret *= (1 - t * g1 / g0);
 			ret *= (1 - t * g2 / g0);
 			
-			Float scaler = t * kg * deltaH * (g1 + g2);
+			Float scaler = t * m_kg * deltaH * (g1 + g2) / g0;
 			
 			for (auto& ap : cache) {
 				ret += ap * scaler;
@@ -271,7 +442,7 @@ private:
 			for (int i = 0; i < p - 1; ++i) {
 				item2 *= inner_f;
 			}
-			auto t = T(sigma_a / calCosDelta(eta1, sin_theta, cos_theta), h * inv_eta1);
+			auto t = T(m_sigmaA / calCosDelta(eta1, sin_theta, cos_theta), h * inv_eta1);
 			auto item3 = Spectrum(1.0f);
 			for (int i = 0; i < p; ++i) {
 				item3 *= t;
@@ -283,7 +454,7 @@ private:
 	}
 	Float calCosDelta(Float eta1, Float sin_gamma, Float cos_gamma) const
 	{
-		return eta1 * cos_gamma / eta;
+		return eta1 * cos_gamma / m_eta;
 	}
 	Spectrum T(const Vector3& sigma_a, Float h) const
 	{
@@ -299,12 +470,18 @@ private:
 	{
 		std::vector<Float> result;
 		Float gamma;
-
+		if (p == 1 && phi<0) {
+			phi += 2*M_PI;
+		}
+		else if (p == 2) {
+			phi += 2 * M_PI;
+		}
 		if (p == 0) {
 			gamma = -phi * 0.5f;
 			result.push_back(sinf(gamma));
 		}
 		else {
+
 			const Float INV_PI3 = INV_PI * INV_PI * INV_PI;
 			Float c = math::safe_asin(1 / eta);
 			Float a = -8 * p * c * INV_PI3;
@@ -312,18 +489,8 @@ private:
 			Float k = p * M_PI - phi;
 			auto tmp = caculateCubicEquation(a, b, k);
 			for (auto& i : tmp) {
-				Float maxv, minv;
-				if (p == 1) {
-					maxv = M_PI - 2 * math::safe_asin(1 / eta);
-					minv = -maxv;
-					maxv += M_PI;
-					minv += M_PI;
-				}
-				else if (p == 2) {
-					maxv = INFINITY;
-					minv = -INFINITY;
-				}
-				if (i >= minv && i <= maxv) {
+				Float maxv = 0.5f * M_PI, minv = -0.5f * M_PI;
+				if ((i >= minv && i <= maxv)) {
 					result.push_back(sinf(i));
 				}
 			}
@@ -372,7 +539,7 @@ private:
 			return 0.5f*math::safe_sqrt(1 - h * h);
 		}
 		else {
-			return 0.5f / std::abs((p / math::safe_sqrt(eta * eta - h * h) - 1.0f / math::safe_sqrt(1 - h * h)));
+			return 0.5f / std::abs(p / math::safe_sqrt(eta * eta - h * h) - 1.0f / math::safe_sqrt(1 - h * h));
 		}
 	}
 
@@ -381,11 +548,11 @@ private:
 	{
 		Float cosv = cos_gamma;
 		Float sinv2 = sin_gamma * sin_gamma;
-		return math::safe_sqrt(eta * eta - sinv2) / cosv;
+		return math::safe_sqrt(m_eta * m_eta - sinv2) / cosv;
 	}
 	Float eta2(Float eta1) const
 	{
-		return eta * eta / eta1;
+		return m_eta * m_eta / eta1;
 	}
 	Float fresnel(Float eta1, Float eta2, Float h) const
 	{
