@@ -71,46 +71,46 @@ public:
 		m_eta = props.getFloat("eta", 1.7f);
 		m_radius = props.getFloat("radius", 0.05f);
 		m_filter = props.getInteger("itemFilter", 7);
-		Log(ELogLevel::EDebug, "%lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf", m_sigmaA.x, m_sigmaA.y, m_sigmaA.z, m_deltaHm, m_wc, m_kg, m_deltaEta,m_eta,m_radius,m_alpha[0],m_beta[0]);
-		for(float phi=-M_PI;phi<=M_PI;phi+=0.01){
-			auto r = Np(0, phi, 0);
-			Log(ELogLevel::EDebug, "Phi %lf, R: %lf %lf %lf", phi * INV_PI * 180, r[0], r[1], r[2]);
-			auto hs = calculateH(phi, 0, m_eta);
-			for (int i = 0; i < hs.size(); ++i) {
-				Log(ELogLevel::EDebug, "H %d %lf", i, hs[i]);
-			}
-			
-		}
-		for (float phi = -M_PI; phi <= M_PI; phi += 0.01) {
-			auto tt = Np(1, phi, 0);
-			Log(ELogLevel::EDebug, "Phi %lf, TT: %lf %lf %lf", phi * INV_PI * 180, tt[0], tt[1], tt[2]);
-			auto hs = calculateH(phi, 1, m_eta);
-			for (int i = 0; i < hs.size(); ++i) {
-				Log(ELogLevel::EDebug, "H %d %lf", i, hs[i]);
-			}
-		}
-		for (float phi = -M_PI; phi <= M_PI; phi += 0.01) {
-			auto trt = Np(2, phi, 0);
-			Log(ELogLevel::EDebug, "Phi %lf, TRT: %lf %lf %lf", phi * INV_PI * 180, trt[0], trt[1], trt[2]);
-			auto hs = calculateH(phi, 2, m_eta);
-			for (int i = 0; i < hs.size(); ++i) {
-				Log(ELogLevel::EDebug, "H %d %lf", i, hs[i]);
-			}
-		}
-		for (int i = 0; i < 3; ++i) {
-			m_maxPhi[i] = -1e5;
-			m_minPhi[i] = 1e5;
-		}
-		for (float gamma = -M_PI * 0.5; gamma < M_PI * 0.5; gamma += 0.01) {
-			float phi[3];
-			float h = sinf(gamma);
-			for (int i = 0; i < 3; ++i) {
-				phi[i] = 2 * i * asinf(h/m_eta) - 2 * gamma + i * M_PI;
-				m_maxPhi[i] = std::max(phi[i], m_maxPhi[i]);
-				m_minPhi[i] = std::min(phi[i], m_minPhi[i]);
-			}
-			//Log(ELogLevel::EDebug, "gamma %lf H %lf r %lf tt %lf trt %lf", gamma * INV_PI * 180, h, phi[0], phi[1], phi[2]);
-		}
+		//Log(ELogLevel::EDebug, "%lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf", m_sigmaA.x, m_sigmaA.y, m_sigmaA.z, m_deltaHm, m_wc, m_kg, m_deltaEta,m_eta,m_radius,m_alpha[0],m_beta[0]);
+		//for(float phi=-M_PI;phi<=M_PI;phi+=0.01){
+		//	auto r = Np(0, phi, 0);
+		//	Log(ELogLevel::EDebug, "Phi %lf, R: %lf %lf %lf", phi * INV_PI * 180, r[0], r[1], r[2]);
+		//	auto hs = calculateH(phi, 0, m_eta);
+		//	for (int i = 0; i < hs.size(); ++i) {
+		//		Log(ELogLevel::EDebug, "H %d %lf", i, hs[i]);
+		//	}
+		//	
+		//}
+		//for (float phi = -M_PI; phi <= M_PI; phi += 0.01) {
+		//	auto tt = Np(1, phi, 0);
+		//	Log(ELogLevel::EDebug, "Phi %lf, TT: %lf %lf %lf", phi * INV_PI * 180, tt[0], tt[1], tt[2]);
+		//	auto hs = calculateH(phi, 1, m_eta);
+		//	for (int i = 0; i < hs.size(); ++i) {
+		//		Log(ELogLevel::EDebug, "H %d %lf", i, hs[i]);
+		//	}
+		//}
+		//for (float phi = -M_PI; phi <= M_PI; phi += 0.01) {
+		//	auto trt = Np(2, phi, 0);
+		//	Log(ELogLevel::EDebug, "Phi %lf, TRT: %lf %lf %lf", phi * INV_PI * 180, trt[0], trt[1], trt[2]);
+		//	auto hs = calculateH(phi, 2, m_eta);
+		//	for (int i = 0; i < hs.size(); ++i) {
+		//		Log(ELogLevel::EDebug, "H %d %lf", i, hs[i]);
+		//	}
+		//}
+		//for (int i = 0; i < 3; ++i) {
+		//	m_maxPhi[i] = -1e5;
+		//	m_minPhi[i] = 1e5;
+		//}
+		//for (float gamma = -M_PI * 0.5; gamma < M_PI * 0.5; gamma += 0.01) {
+		//	float phi[3];
+		//	float h = sinf(gamma);
+		//	for (int i = 0; i < 3; ++i) {
+		//		phi[i] = 2 * i * asinf(h/m_eta) - 2 * gamma + i * M_PI;
+		//		m_maxPhi[i] = std::max(phi[i], m_maxPhi[i]);
+		//		m_minPhi[i] = std::min(phi[i], m_minPhi[i]);
+		//	}
+		//	//Log(ELogLevel::EDebug, "gamma %lf H %lf r %lf tt %lf trt %lf", gamma * INV_PI * 180, h, phi[0], phi[1], phi[2]);
+		//}
 		//for (float h = -1; h <= 1; h+=0.01) {
 		//	auto f = fresnel(m_eta, m_eta, h);
 		//	auto f2 = fresnel(1 / m_eta, 1 / m_eta, h / m_eta);
@@ -219,7 +219,12 @@ public:
 		//bRec.sampledComponent = 0;
 		//bRec.sampledType = EDiffuseReflection | EDiffuseTransmission;
 		//pdf = this->pdf(bRec);
-		return bsdf(bRec);
+
+		auto& n = bRec.its.geoFrame.n;
+		auto wo_geo = normalize(bRec.its.geoFrame.toLocal(normalize(bRec.its.toWorld(bRec.wo))));
+		auto sin_theta = wo_geo.x;
+		auto cos_theta = math::safe_sqrt(1 - sin_theta * sin_theta);
+		return bsdf(bRec) * std::abs(cos_theta) * 4 * M_PI;
 	}
 	virtual Float pdf(const BSDFSamplingRecord& bRec, EMeasure measure = ESolidAngle) const
 	{
@@ -328,11 +333,11 @@ private:
 
 		auto thetai = math::safe_asin(sin_thetai);
 		if (wi_geo.z < 0) {
-			thetai += M_PI;
+			thetai = M_PI - thetai;
 		}
 		auto thetao = math::safe_asin(sin_thetao);
 		if (wo_geo.z < 0) {
-			thetao += M_PI;
+			thetao = M_PI - thetao;
 		}
 		auto theta_d = (thetao - thetai) * 0.5f;
 		auto theta_h = (thetao + thetai) * 0.5f;
@@ -360,10 +365,11 @@ private:
 		for (int i = 0; i < 3; ++i) {
 			if ((1 << i) & m_filter) {
 				ret += M(i, theta_h) * Np(i, phi, sin_theta_d);
+
 			}
 			//ret = Np(1, phi, sin_theta_d);
 		}
-		//ret /= cos_theta_d2;
+		ret /= std::max(0.001f, cos_theta_d2);
 		
 		return 2.0f * m_radius * ret;
 	}
@@ -377,6 +383,9 @@ private:
 		Spectrum ret(0.0f);
 
 		auto cos_theta = math::safe_sqrt(1 - sin_theta * sin_theta);
+		if (std::abs(cos_theta) < 1e-7) {
+			return Spectrum(1.0f);
+		}
 		Float eta1 = this->eta1(sin_theta, cos_theta);
 		Float eta2 = this->eta2(eta1);
 		auto hs = calculateH(phi, p, eta1);

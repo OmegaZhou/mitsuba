@@ -65,7 +65,7 @@ protected:
     void setDocumentation(const QString &text);
     std::vector<const BSDF*> getBsdfs(const Scene * scene);
     const BSDF* getBsdf(const Scene * scene);
-    void updateBsdf(Scene* scene,const BSDF* old, ref<BSDF> bsdf);
+    bool updateBsdf(Scene* scene,const BSDF* old, ref<BSDF> bsdf);
     QStringList validateConfiguration() const;
 private:
     Ui::RenderSettingsDialog *ui;

@@ -370,8 +370,9 @@ const BSDF* RenderSettingsDialog::getBsdf(const Scene *scene){
     }
     return nullptr;
 }
-void RenderSettingsDialog::updateBsdf(Scene* scene,const BSDF* old, ref<BSDF> bsdf)
+bool RenderSettingsDialog::updateBsdf(Scene* scene,const BSDF* old, ref<BSDF> bsdf)
 {
+    bool ret=false;
     auto& objects = scene->getReferencedObjects();
     for(auto& object : objects){
         if(object.get()==old){
@@ -384,6 +385,10 @@ void RenderSettingsDialog::updateBsdf(Scene* scene,const BSDF* old, ref<BSDF> bs
             shape->setBSDF(bsdf);
         }
     }
+    if(old->getProperties()!=bsdf->getProperties()){
+        ret=true;
+    }
+    return ret;
 }
 void RenderSettingsDialog::load(const SceneContext *ctx) {
     const Scene *scene = ctx->scene.get();
@@ -463,6 +468,18 @@ void RenderSettingsDialog::apply(SceneContext *ctx) {
     newResolver->prependPath(fs::absolute(scene->getSourceFile()).parent_path());
     thread->setFileResolver(newResolver);
 
+    bool isUpdateBsdf=false;
+    bool isLightBsdf=false;
+    Properties bsdfProps(getPluginName(ui->bsdfBox));
+    if (m_bsdfNode != NULL)
+        m_bsdfNode->putProperties(bsdfProps);
+    ref<BSDF> bsdf = static_cast<BSDF *>
+        (pluginMgr->createObject(MTS_CLASS(BSDF), bsdfProps));
+    bsdf->configure();
+    if(updateBsdf(scene, oldBsdf, bsdf)){
+        isUpdateBsdf=true;
+    }
+
     /* Configure the reconstruction filter */
     Properties rFilterProps(getPluginName(ui->rFilterBox));
     if (m_rFilterNode != NULL)
@@ -483,16 +500,14 @@ void RenderSettingsDialog::apply(SceneContext *ctx) {
     Properties integratorProps(getPluginName(ui->integratorBox));
     if (m_integratorNode != NULL)
         m_integratorNode->putProperties(integratorProps);
+    if(integratorProps.getPluginName()=="cached_path"){
+        integratorProps.setBoolean("bsdfUpdate", isUpdateBsdf);
+        integratorProps.setBoolean("lightUpdate", isLightBsdf);
+    }
     ref<Integrator> integrator = static_cast<Integrator *>
         (pluginMgr->createObject(MTS_CLASS(Integrator), integratorProps));
     integrator->configure();
 
-    Properties bsdfProps(getPluginName(ui->bsdfBox));
-    if (m_bsdfNode != NULL)
-        m_bsdfNode->putProperties(bsdfProps);
-    ref<BSDF> bsdf = static_cast<BSDF *>
-        (pluginMgr->createObject(MTS_CLASS(BSDF), bsdfProps));
-    bsdf->configure();
 
     if (ui->icBox->isChecked()) {
         Properties icProps("irrcache");
@@ -580,7 +595,6 @@ void RenderSettingsDialog::apply(SceneContext *ctx) {
     newSensor->configure();
 
     /* Update the scene with the newly constructed elements */
-    updateBsdf(scene,oldBsdf, bsdf);
     scene->removeSensor(oldSensor);
     scene->addSensor(newSensor);
     scene->setSensor(newSensor);
