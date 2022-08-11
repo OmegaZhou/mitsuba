@@ -127,6 +127,15 @@ void TreeItem::setProperty(const std::string &name, const Properties &props) {
                 m_realTypes[props.getPluginName()+name]=Properties::ESpectrum;
             }
             break;
+        case Properties::EVector:
+            {
+                auto& color = props.getVector(name);
+                char buf[16];
+                std::sprintf(buf,"%.6lf,%.6lf,%.6lf",color[0],color[1],color[2]);
+                data = QVariant(QString(buf));
+                m_realTypes[props.getPluginName()+name]=Properties::EVector;
+            }
+            break;
         default:
             SLog(EError, "TreeItem::getProperties(): \"%s\": Unable to handle elements of type %i",
                 name.c_str(), props.getType(name));
@@ -184,6 +193,17 @@ void TreeItem::putProperties(Properties &props) const {
                             is.ignore(v.size(),',');
                             is>>color[2];
                             props.setSpectrum(name, color);
+                        }else if(iter->second==Properties::EVector){
+                            auto v=value.toString().toStdString();
+                            std::istringstream is(v);
+                            Vector color;
+                            std::string skip;
+                            is>>color[0];
+                            is.ignore(v.size(),',');
+                            is>>color[1];
+                            is.ignore(v.size(),',');
+                            is>>color[2];
+                            props.setVector(name, color);
                         }
                     }else{
                         props.setString(name, value.toString().toStdString());
@@ -318,6 +338,9 @@ void XMLTreeModel::populate(const QString &className, TreeItem *parent) {
             // sscanf(str.c_str(),"%f,%f,%f",&x,&y,&z);
             // variantValue = QVariant(QVector3D(x,y,z));
             parent->getRealTypes()[plugin.attribute("name").toStdString()+name.toStdString()]=Properties::ESpectrum;
+            variantValue = QVariant(value);
+        }else if(type == "vec3"){
+            parent->getRealTypes()[plugin.attribute("name").toStdString()+name.toStdString()]=Properties::EVector;
             variantValue = QVariant(value);
         } else {
             SLog(EError, "Unexpected property type!");

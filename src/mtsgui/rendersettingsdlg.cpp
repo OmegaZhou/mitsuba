@@ -156,6 +156,10 @@ RenderSettingsDialog::RenderSettingsDialog(QWidget *parent) :
                 ui->rFilterBox->addItem(readableName, list);
             else if (type == "bsdf")
                 ui->bsdfBox->addItem(readableName, list);
+            else if(type=="shape")
+                ui->shapeBox->addItem(readableName, list);
+            else if(type=="emitter")
+                ui->emitterBox->addItem(readableName, list);
         }
         if (name == "irrcache")
             ui->icBox->setProperty("help", docString);
@@ -177,6 +181,8 @@ RenderSettingsDialog::RenderSettingsDialog(QWidget *parent) :
     m_samplerNode = m_model->registerClass("IndependentSampler", "Independent sampler");
     m_rFilterNode = m_model->registerClass("BoxFilter", "Box filter");
     m_bsdfNode = m_model->registerClass("MarschnerBSDF", "Marschner BSDF");
+    m_shapeNode = m_model->registerClass("Sphere", "Sphere");
+    m_emitterNode = m_model->registerClass("Area", "Area");
     QRegExp resRegExp("^[1-9]\\d{0,4}x[1-9]\\d{0,4}$");
     ui->resolutionBox->setValidator(new QRegExpValidator(resRegExp, this));
     QPalette pal = ui->helpViewer->palette();
@@ -282,6 +288,14 @@ void RenderSettingsDialog::update() {
     m_bsdfNode = m_model->updateClass(m_bsdfNode,
         ui->bsdfBox->itemData(index).toList().at(0).toString(),
         ui->bsdfBox->itemText(index));
+    index = ui->samplerBox->currentIndex();
+    m_shapeNode = m_model->updateClass(m_shapeNode,
+        ui->shapeBox->itemData(index).toList().at(0).toString(),
+        ui->shapeBox->itemText(index));
+    index = ui->emitterBox->currentIndex();
+    m_emitterNode = m_model->updateClass(m_emitterNode,
+        ui->emitterBox->itemData(index).toList().at(0).toString(),
+        ui->emitterBox->itemText(index));
     if (ui->icBox->isChecked()) {
         m_icNode = m_model->updateClass(m_icNode,
             "IrradianceCacheIntegrator", tr("Irradiance Cache"));
@@ -370,6 +384,107 @@ const BSDF* RenderSettingsDialog::getBsdf(const Scene *scene){
     }
     return nullptr;
 }
+Properties RenderSettingsDialog::convertFromShapeProperties(const Properties& properties) const
+{
+    Properties ret(properties.getPluginName());
+    auto names = properties.getPropertyNames();
+    if(properties.hasProperty("toWorld")){
+        Transform transform = properties.getTransform("toWorld");
+        Vector translate;
+        Vector scale;
+        auto& m = transform.getMatrix();
+        for(int i=0;i<3;++i){
+            translate[i]=m(i,3);
+        }
+        for(int i=0;i<3;++i){
+            auto c = m.col(i);
+            scale[i]=c.length();
+        }
+        auto rotate = m;
+        for(int j=0;j<3;++j){
+            for(int i=0;i<3;++i){
+                rotate(i,j)/=scale[j];
+            }
+        }
+        double cos_v;
+        double trace=0;
+        for(int i=0;i<3;++i){
+            trace+=rotate(i,i);
+        }
+        cos_v = 0.5*(trace-1);
+        double angle = math::safe_acos(cos_v);
+        double sin_v = math::safe_sqrt(1-cos_v*cos_v);
+        Matrix4x4 tran_m;
+        rotate.transpose(tran_m);
+        auto diff = 0.5f*(rotate-tran_m);
+        Vector axis(diff(1,2),diff(2,0),diff(0,1));
+        if(std::abs(sin_v)<1e-3){
+            if(std::abs(cos_v-1)<1e-3){
+                axis=Vector(0,0,1);
+            }else{
+                diff = 0.5f*(rotate+tran_m);
+                double nx=math::safe_sqrt((diff(0,0)-cos_v)/(1-cos_v));
+                double ny=diff(1,0)/(1-cos_v)/nx;
+                double nz=diff(2,0)/(1-cos_v)/nx;
+                axis= Vector(nx,ny,nz);
+                axis = normalize(axis);
+            }
+        }else{
+            axis/=sin_v;
+            auto k = normalize(axis);
+            std::string str1,str2;
+            str1 = axis.toString();
+            str2 = k.toString();
+            //SLog(ELogLevel::EDebug, "fuck %s %s %.9lf %.9lf",str1.c_str(),str2.c_str(),cos_v,sin_v);
+        }
+        
+        ret.setVector("scale",scale);
+        ret.setVector("rotate_axis",axis);
+        ret.setFloat("rotate_angle",angle*180*INV_PI);
+        ret.setVector("translate",translate);
+    }else{
+        ret.setVector("scale",Vector(1,1,1));
+        ret.setVector("rotate_axis",Vector(0,0,1));
+        ret.setFloat("rotate_angle",0);
+        ret.setVector("translate",Vector(0,0,0));
+    }
+    for(auto& name:names){
+        if(name!="toWorld"){
+            ret.copyAttribute(properties,name,name);
+        }
+    }
+    return ret;
+}
+Properties RenderSettingsDialog::convertToShapeProperties(const Properties& properties) const
+{
+    std::set<std::string> convert_names = {"scale","rotate_axis","rotate_angle","translate"};
+    auto names = properties.getPropertyNames();
+    Properties ret(properties.getPluginName());
+    for(auto& name:names){
+        if(convert_names.find(name)==convert_names.end()){
+            ret.copyAttribute(properties,name,name);
+        }
+    }
+    Transform transform;
+    Vector3 scale(1,1,1),rotate_axis(0,0,1),translate(0,0,0);
+    Float rotate_angle=0;
+    if(properties.hasProperty("scale")){
+        scale = properties.getVector("scale");
+    }
+    if(properties.hasProperty("rotate_axis")){
+        rotate_axis = properties.getVector("rotate_axis");
+    }
+    if(properties.hasProperty("rotate_angle")){
+        rotate_angle = properties.getFloat("rotate_angle");
+    }
+    if(properties.hasProperty("translate")){
+        translate = properties.getVector("translate");
+    }
+    transform = Transform::translate(translate)*Transform::rotate(rotate_axis,rotate_angle)*Transform::scale(scale);
+    auto k = transform.toString();
+    ret.setTransform("toWorld",transform);
+    return ret;
+}
 bool RenderSettingsDialog::updateBsdf(Scene* scene,const BSDF* old, ref<BSDF> bsdf)
 {
     bool ret=false;
@@ -390,6 +505,16 @@ bool RenderSettingsDialog::updateBsdf(Scene* scene,const BSDF* old, ref<BSDF> bs
     }
     return ret;
 }
+const Shape* RenderSettingsDialog::getEmitter(const Scene* scene)
+{
+    for(auto shape : scene->getShapes()){
+        if(shape->isEmitter()){
+            return shape;
+        }
+        
+    }
+    return nullptr;
+}
 void RenderSettingsDialog::load(const SceneContext *ctx) {
     const Scene *scene = ctx->scene.get();
     const Film *film = scene->getFilm();
@@ -398,14 +523,21 @@ void RenderSettingsDialog::load(const SceneContext *ctx) {
     const Integrator *integrator = scene->getIntegrator();
     const BSDF* bsdf = getBsdf(scene);
     Properties integratorProps = integrator->getProperties();
-
+    const Shape* lightShape = getEmitter(scene);
+    // for(auto shape : scene->getReferencedObjects()){
+    //     auto str= shape->getProperties().toString();
+    //     SLog(ELogLevel::EDebug, str.c_str());
+    // }
     if (integratorProps.getPluginName() == "adaptive") {
         ui->aiBox->setChecked(true);
         m_model->setProperties(m_aiNode, integratorProps);
         integrator = integrator->getSubIntegrator(0);
         integratorProps = integrator->getProperties();
     }
-
+    for(auto emitter : scene->getEmitters()){
+        auto eval = emitter->evalPosition(PositionSamplingRecord());
+        SLog(ELogLevel::EDebug,"fuck1 %lf %lf %lf",eval[0],eval[1],eval[2]);
+    }
     if (integratorProps.getPluginName() == "irrcache") {
         ui->icBox->setChecked(true);
         m_model->setProperties(m_icNode, integratorProps);
@@ -423,6 +555,10 @@ void RenderSettingsDialog::load(const SceneContext *ctx) {
     if(bsdf){
         setComboBox(ui->bsdfBox, bsdf->getProperties().getPluginName());
     }
+    if(lightShape){
+        setComboBox(ui->shapeBox, lightShape->getProperties().getPluginName());
+        setComboBox(ui->emitterBox, lightShape->getEmitter()->getProperties().getPluginName());
+    }
     update();
 
     m_model->setProperties(m_rFilterNode, rFilterProps);
@@ -431,7 +567,10 @@ void RenderSettingsDialog::load(const SceneContext *ctx) {
     if(bsdf){
         m_model->setProperties(m_bsdfNode, bsdf->getProperties());
     }
-
+    if(lightShape){
+        m_model->setProperties(m_shapeNode, convertFromShapeProperties(lightShape->getProperties()));
+        m_model->setProperties(m_emitterNode, lightShape->getEmitter()->getProperties());
+    }
     /* Make comboboxes etc editable by default */
     int row = 0;
     for (int i = 0; i < m_model->rowCount(); ++i) {
@@ -453,7 +592,42 @@ void RenderSettingsDialog::load(const SceneContext *ctx) {
 
     ui->treeView->expandAll();
 }
-
+static bool compareTransform(const Transform& t1, const Transform& t2)
+{
+    auto& m1 = t1.getMatrix();
+    auto& m2 = t2.getMatrix();
+    for(int i=0;i<4;++i){
+        for(int j=0;j<4;++j){
+            if(std::abs(m1(i,j)-m2(i,j))>1e-3){
+                //SLog(ELogLevel::EDebug,"fuck %lf",m1(i,j)-m2(i,j));
+                return false;
+            }
+        }
+    }
+    return true;
+}
+bool RenderSettingsDialog::updateEmitter(Scene* scene, ref<Shape> shape, const Properties& shapeProperties)
+{
+    auto old = getEmitter(scene);
+    auto p2 = old->getEmitter()->getProperties();
+    bool flag = compareTransform(old->getProperties().getTransform("toWorld"),shape->getProperties().getTransform("toWorld"));
+    //return true;
+    if(!(flag&&p2==shape->getEmitter()->getProperties())){
+        //SLog(ELogLevel::EDebug,"fuck %d",(int)flag);
+        scene->getEmitters().clear();
+        for(auto& s : scene->getShapes()){
+            if(s==old){
+                s=shape;
+                s->getEmitter()->setParent(s);
+            }
+        }
+        scene->invalidate();
+        scene->initialize();
+        //scene->updateKDTree();
+        return true;
+    }
+    return false;
+}
 void RenderSettingsDialog::apply(SceneContext *ctx) {
     Scene *scene = new Scene(ctx->scene);
     ref<Sensor> oldSensor = scene->getSensor();
@@ -469,7 +643,7 @@ void RenderSettingsDialog::apply(SceneContext *ctx) {
     thread->setFileResolver(newResolver);
 
     bool isUpdateBsdf=false;
-    bool isLightBsdf=false;
+    bool isUpdateLight=false;
     Properties bsdfProps(getPluginName(ui->bsdfBox));
     if (m_bsdfNode != NULL)
         m_bsdfNode->putProperties(bsdfProps);
@@ -478,6 +652,23 @@ void RenderSettingsDialog::apply(SceneContext *ctx) {
     bsdf->configure();
     if(updateBsdf(scene, oldBsdf, bsdf)){
         isUpdateBsdf=true;
+    }
+
+    Properties shapeProps(getPluginName(ui->shapeBox));
+    Properties emitterProps(getPluginName(ui->emitterBox));
+    if (m_shapeNode != NULL)
+        m_shapeNode->putProperties(shapeProps);
+    if(m_emitterNode!=NULL){
+        m_emitterNode->putProperties(emitterProps);
+    }
+    ref<Shape> shape = static_cast<Shape *>
+        (pluginMgr->createObject(MTS_CLASS(Shape), convertToShapeProperties(shapeProps)));
+    ref<Emitter> emitter = static_cast<Emitter *>
+        (pluginMgr->createObject(MTS_CLASS(Emitter), emitterProps));
+    shape->setEmitter(emitter);
+    //emitter->setParent(shape);
+    if(updateEmitter(scene, shape, shapeProps)){
+        isUpdateLight=true;
     }
 
     /* Configure the reconstruction filter */
@@ -502,12 +693,14 @@ void RenderSettingsDialog::apply(SceneContext *ctx) {
         m_integratorNode->putProperties(integratorProps);
     if(integratorProps.getPluginName()=="cached_path"){
         integratorProps.setBoolean("bsdfUpdate", isUpdateBsdf);
-        integratorProps.setBoolean("lightUpdate", isLightBsdf);
+        integratorProps.setBoolean("lightUpdate", isUpdateLight);
     }
+
     ref<Integrator> integrator = static_cast<Integrator *>
         (pluginMgr->createObject(MTS_CLASS(Integrator), integratorProps));
     integrator->configure();
 
+    
 
     if (ui->icBox->isChecked()) {
         Properties icProps("irrcache");
@@ -530,7 +723,7 @@ void RenderSettingsDialog::apply(SceneContext *ctx) {
         ai->configure();
         integrator = ai;
     }
-
+    
     QStringList resolution = ui->resolutionBox->currentText().split('x');
     SAssert(resolution.size() == 2);
     Vector2i cropSize(
@@ -601,10 +794,11 @@ void RenderSettingsDialog::apply(SceneContext *ctx) {
 
     scene->setSampler(sampler);
     scene->setIntegrator(integrator);
+    
     scene->configure();
-
     ctx->scene = scene;
     thread->setFileResolver(oldResolver);
+    SLog(ELogLevel::EDebug, "fuck3 %x", scene);
 }
 
 RenderSettingsDialog::~RenderSettingsDialog() {

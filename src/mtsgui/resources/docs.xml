@@ -1,5 +1,14 @@
 <?xml version="1.0"?>
 <documentation version="2.0.2">
+    <plugin type="shape" className="Sphere" show="true" readableName="Sphere" name="sphere">
+        <param name="scale" readableName="Scale" type="vec3" default="1,1,1"/>
+        <param name="rotate_axis" readableName="Rotate Axis" type="vec3" default="1,0,0"/>
+        <param name="rotate_angle" readableName="Rotate Angle" type="float" default="0"/>
+        <param name="translate" readableName="Translate" type="vec3" default="0,0,0"/>
+    </plugin>
+    <plugin type="emitter" className="Area" show="true" readableName="Area" name="area">
+        <param name="radiance" readableName="Radiance" type="rgb" default="0,0,0"/>
+    </plugin>
     <plugin type="bsdf" className="MarschnerBSDF" show="true" readableName="Marschner BSDF" name="marschner_bsdf">
         <shortDescr>MarschnerBSDF</shortDescr>
         <descr>MarschnerBSDF</descr>

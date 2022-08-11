@@ -65,8 +65,12 @@ protected:
     void setDocumentation(const QString &text);
     std::vector<const BSDF*> getBsdfs(const Scene * scene);
     const BSDF* getBsdf(const Scene * scene);
+    const Shape* getEmitter(const Scene* scene);
     bool updateBsdf(Scene* scene,const BSDF* old, ref<BSDF> bsdf);
+    bool updateEmitter(Scene* scene, ref<Shape> shape, const Properties& shapeProperties);
     QStringList validateConfiguration() const;
+    Properties convertFromShapeProperties(const Properties& properties) const;
+    Properties convertToShapeProperties(const Properties& properties) const;
 private:
     Ui::RenderSettingsDialog *ui;
     QDomDocument m_document;
@@ -75,6 +79,8 @@ private:
     TreeItem *m_rFilterNode, *m_icNode;
     TreeItem *m_aiNode;
     TreeItem *m_bsdfNode;
+    TreeItem *m_shapeNode;
+    TreeItem *m_emitterNode;
     QString m_originalResolution;
     QString m_currentDocumentation;
     QStringList m_statusMessages;
