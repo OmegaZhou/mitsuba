@@ -30,6 +30,7 @@ struct PathItem
 
     }
     Spectrum m_throughput;
+    Spectrum m_originThroughput;
 
     Spectrum m_driectLightValue;
     Float m_lightWeight;
@@ -38,6 +39,7 @@ struct PathItem
     Spectrum m_hitLightValue;
     Float m_hitLightWeight;
     Spectrum m_bsdfValue;
+    Spectrum m_originBsdfValue;
     Float m_bsdfPdf;
 
     Vector3 m_lightWo;
@@ -59,7 +61,11 @@ struct PathCache
 {
     bool m_bsdfUpdate;
     bool m_lightUpdate;
+    bool m_isInit;
     std::vector<PathItem> m_items;
+    PathCache() :m_bsdfUpdate(true), m_lightUpdate(true), m_isInit(false) {
+
+    }
     void addItem()
     {
         m_items.push_back(PathItem());
@@ -110,6 +116,17 @@ public:
     }
     std::vector<PathCache>& getSamplesCache(unsigned int x, unsigned int y) {
         return m_cache[x][y];
+    }
+    void calMemory() {
+        long long memory = 0;
+        for (auto& vec : m_cache) {
+            for (auto& v : vec) {
+                for (auto& item : v) {
+                    memory += item.m_items.size() * sizeof(PathItem);
+                }
+            }
+        }
+        SLog(ELogLevel::EDebug, "Memory cost:%lf MB", memory / 1024.0 / 1024.0);
     }
 private:
     PathCacheManager(): m_isInit(false) {
@@ -230,13 +247,13 @@ public:
         Spectrum Li(0.0f);
 
         if (cache.m_bsdfUpdate && cache.m_lightUpdate) {
-            Li = LiTotalUpdate(r, rRec, cache);
+            if (cache.m_isInit) {
+                Li = LiWithTotalUpdate(r, rRec, cache);
+            }
+            else {
+                Li = LiInit(r, rRec, cache);
+            }
             
-            //auto k = Li - LiWithUpdateBsdf(cache);
-            //auto diff = k[0] * k[0] + k[1] * k[1] + k[2] * k[2];
-            //if (diff > 1e-5) {
-            //    Log(ELogLevel::EDebug, "diff %lf %lf %lf", k[0], k[1], k[2]);
-            //}
         }
         else if (cache.m_bsdfUpdate && (!cache.m_lightUpdate)) {
             Li = LiWithUpdateBsdf(cache);
@@ -249,7 +266,7 @@ public:
         }
         cache.m_bsdfUpdate = false;
         cache.m_lightUpdate = false;
-
+        cache.m_isInit = true;
         /* Store statistics */
         avgPathLength.incrementBase();
         avgPathLength += rRec.depth;
@@ -309,13 +326,13 @@ public:
 
         if (!sensor->getFilm()->hasAlpha()) /* Don't compute an alpha channel if we don't have to */
             queryType &= ~RadianceQueryRecord::EOpacity;
-
         for (size_t i = 0; i < points.size(); ++i) {
             Point2i offset = Point2i(points[i]) + Vector2i(block->getOffset());
             if (stop)
                 break;
             sampler->generate(offset);
             auto& caches = PathCacheManager::getInstance().getSamplesCache(offset.x, offset.y);
+            
             for (size_t j = 0; j < sampler->getSampleCount(); j++) {
                 rRec.newQuery(queryType, sensor->getMedium());
                 Point2 samplePos(Point2(offset) + Vector2(rRec.nextSample2D()));
@@ -334,8 +351,8 @@ public:
                 block->put(samplePos, spec, rRec.alpha);
                 sampler->advance();
             }
+            
         }
-
     }
     bool render(Scene* scene,
         RenderQueue* queue, const RenderJob* job,
@@ -370,6 +387,8 @@ public:
         m_process = NULL;
         sched->unregisterResource(integratorResID);
         sched->unregisterResource(newSceneID);
+
+        PathCacheManager::getInstance().calMemory();
         return proc->getReturnStatus() == ParallelProcess::ESuccess;
     }
     MTS_DECLARE_CLASS()
@@ -387,9 +406,11 @@ private:
             item.m_intersection = its;
             item.m_ray = ray;
             item.m_throughput = throughput;
+            item.m_originThroughput = throughput;
             item.m_eta = eta;
             item.m_scattered = scattered;
             item.rRecType = rRec.type;
+            
             if (!its.isValid()) {
                 /* If no intersection could be found, potentially return
                    radiance from a environment luminaire if it exists */
@@ -397,7 +418,7 @@ private:
                     && (!m_hideEmitters || scattered)) {
                     auto value = scene->evalEnvironment(ray);
                     Li += throughput * value;
-                    item.m_otherLightValue += value;
+                    cache.m_items.back().m_otherLightValue += value;
                 }
                 break;
             }
@@ -484,6 +505,7 @@ private:
             Spectrum bsdfWeight = bsdf->sample(bRec, bsdfPdf, rRec.nextSample2D());
             item.m_bsdfWo = bRec.wo;
             item.m_bsdfValue = bsdfWeight;
+            item.m_originBsdfValue = bsdfWeight;
             item.m_bsdfPdf = bsdfPdf;
 
             if (bsdfWeight.isZero())
@@ -590,6 +612,10 @@ private:
             const BSDF* bsdf = its.getBSDF(ray);
             DirectSamplingRecord dRec(its);
 
+            item.m_lightBsdfValue = Spectrum(0.0f);
+            item.m_lightWeight = 0;
+            item.m_driectLightValue = Spectrum(0.0f);
+            item.m_lightWo = Vector();
             if (item.rRecType & RadianceQueryRecord::EDirectSurfaceRadiance &&
                 (bsdf->getType() & BSDF::ESmooth)) {
                 Spectrum value = scene->sampleEmitterDirect(dRec, rRec.nextSample2D());
@@ -622,8 +648,9 @@ private:
             }
             // 若bsdf采样cache采样到了光源，则光源失效，因而不需要计算bsdf采样到光源的情况
         }
-        cache.m_items.erase(cache.m_items.begin() + depth, cache.m_items.end());
-        if (depth != cache.m_items.size()) {
+        
+        if (depth != cache.m_items.size() || cache.m_items.size() == 0) {
+            cache.m_items.erase(cache.m_items.begin() + depth, cache.m_items.end());
             Spectrum throughput(1.0f);
             Float eta = 1.0f;
             RayDifferential ray(r);
@@ -648,7 +675,7 @@ private:
 
         return Li;
     }
-    Spectrum LiTotalUpdate(const RayDifferential& r, RadianceQueryRecord& rRec, PathCache& cache) const
+    Spectrum LiInit(const RayDifferential& r, RadianceQueryRecord& rRec, PathCache& cache) const
     {
         cache.clear();
 
@@ -731,8 +758,8 @@ private:
                     break;
                 }
                 Li += bsdfWeight * throughput * value * item.m_hitLightWeight;
-                if (i + 1 != cache.m_items.size()) {
-                    cache.m_items[i + 1].m_throughput *= bsdfWeight / item.m_bsdfValue;
+                if (i + 1 != cache.m_items.size() && (!item.m_bsdfValue.isZero())) {
+                    cache.m_items[i + 1].m_throughput = cache.m_items[i + 1].m_originThroughput * bsdfWeight / item.m_originBsdfValue;
                 }
                 item.m_bsdfValue = bsdfWeight;
             }
@@ -744,6 +771,110 @@ private:
         return Li;
     }
 
+    Spectrum LiWithTotalUpdate(const RayDifferential& r, RadianceQueryRecord& rRec, PathCache& cache) const 
+    {
+        Spectrum Li(0.0f);
+        // 假定bsdf只改变参数的情况下，对bsdf采样的分布函数影响不大，因此可以直接使用原重要性权重
+        // 重要性权重只影响蒙特卡洛积分方差，不改变期望
+        int depth;
+        auto scene = rRec.scene;
+        for (depth = 0; depth < cache.m_items.size(); ++depth) {
+            auto& item = cache.m_items[depth];
+            auto& its = item.m_intersection;
+            auto& throughput = item.m_throughput;
+            auto& scattered = item.m_scattered;
+            auto& ray = item.m_ray;
+            //当击中光源或没击中物体时
+            //由于光源更新，可能此时打中物体
+            if (item.m_itsIsEmitter || (!its.isValid())) {
+                break;
+            }
+            const BSDF* bsdf = its.getBSDF(ray);
+            DirectSamplingRecord dRec(its);
+
+            item.m_lightBsdfValue = Spectrum(0.0f);
+            item.m_lightWeight = 0;
+            item.m_driectLightValue = Spectrum(0.0f);
+            item.m_lightWo = Vector();
+            if (item.rRecType & RadianceQueryRecord::EDirectSurfaceRadiance &&
+                (bsdf->getType() & BSDF::ESmooth)) {
+                Spectrum value = scene->sampleEmitterDirect(dRec, rRec.nextSample2D());
+
+                if (!value.isZero()) {
+                    const Emitter* emitter = static_cast<const Emitter*>(dRec.object);
+                    /* Allocate a record for querying the BSDF */
+                    auto wo = its.toLocal(dRec.d);
+                    BSDFSamplingRecord bRec(its, wo, ERadiance);
+                    /* Evaluate BSDF * cos(theta) */
+                    const Spectrum bsdfVal = bsdf->eval(bRec);
+                    /* Prevent light leaks due to the use of shading normals */
+                    if (!bsdfVal.isZero() && (!m_strictNormals
+                        || dot(its.geoFrame.n, dRec.d) * Frame::cosTheta(bRec.wo) > 0)) {
+
+                        /* Calculate prob. of having generated that direction
+                           using BSDF sampling */
+                        Float bsdfPdf = (emitter->isOnSurface() && dRec.measure == ESolidAngle)
+                            ? bsdf->pdf(bRec) : 0;
+
+                        /* Weight using the power heuristic */
+                        Float weight = miWeight(dRec.pdf, bsdfPdf);
+                        Li += throughput * value * bsdfVal * weight;
+                        item.m_lightBsdfValue = bsdfVal;
+                        item.m_lightWeight = weight;
+                        item.m_driectLightValue = value;
+                        item.m_lightWo = wo;
+                    }
+                }
+
+            }
+
+            /* ==================================================================== */
+            /*                            BSDF sampling                             */
+            /* ==================================================================== */
+
+            // 采样时若击中光源
+            // bsdfWeight = bsdf*cos/pdf
+            // cache.m_hitLightWeights[i] = miWeight(bsdfPdf, lumPdf)
+            //if (Li.isNaN()) {
+            //    Log(ELogLevel::EDebug, "fuck1");
+            //}
+            if (!item.m_bsdfWo.isZero()) {
+                BSDFSamplingRecord bRec(its, item.m_bsdfWo, ERadiance);
+                Spectrum bsdfWeight = bsdf->eval(bRec) / item.m_bsdfPdf;
+                if (bsdfWeight.isZero()) {
+                    break;
+                }
+                if (depth + 1 != cache.m_items.size()) {
+                    cache.m_items[depth + 1].m_throughput = cache.m_items[depth + 1].m_originThroughput*bsdfWeight / item.m_originBsdfValue;
+                }
+                item.m_bsdfValue = bsdfWeight;
+            }
+        }
+        if (depth != cache.m_items.size() || cache.m_items.size()==0) {
+            cache.m_items.erase(cache.m_items.begin() + depth, cache.m_items.end());
+            Spectrum throughput(1.0f);
+            Float eta = 1.0f;
+            RayDifferential ray(r);
+            bool scattered = false;
+
+            if (depth == 0) {
+                rRec.rayIntersect(ray);
+                ray.mint = Epsilon;
+            }
+            else {
+                auto& item = cache.m_items[depth - 1];
+                rRec.depth = depth;
+                throughput = item.m_throughput;
+                eta = item.m_eta;
+                scattered = item.m_scattered;
+                ray = item.m_ray;
+                rRec.its = item.m_intersection;
+                rRec.type = item.rRecType;
+            }
+            LiLoop(r, rRec, cache, ray, scattered, throughput, Li, eta);
+        }
+        return Li;
+    }
     Spectrum LiWithoutUpdate(const PathCache& cache) const
     {
         Spectrum Li(0.0f);
@@ -751,7 +882,12 @@ private:
             auto& item = cache.m_items[i];
             auto& throughput = item.m_throughput;
             Li += throughput * item.m_otherLightValue;
-
+            if (Li.isNaN()) {
+                auto str1 = throughput.toString();
+                auto str2 = item.m_otherLightValue.toString();
+                Log(ELogLevel::EDebug, "fuck1 %s %s", str1.c_str(), str2.c_str());
+                break;
+            }
             // 采样直接光
             {
                 Spectrum value = item.m_driectLightValue;
@@ -760,7 +896,10 @@ private:
                 Li += throughput * value * bsdfVal * weight;
                 /* Prevent light leaks due to the use of shading normals */
             }
-
+            if (Li.isNaN()) {
+                Log(ELogLevel::EDebug, "fuck2");
+                break;
+            }
             /* ==================================================================== */
             /*                            BSDF sampling                             */
             /* ==================================================================== */
@@ -768,7 +907,10 @@ private:
             Spectrum bsdfWeight = item.m_bsdfValue;
             Spectrum value = item.m_hitLightValue;
             Li += bsdfWeight * throughput * value * item.m_hitLightWeight;
-
+            if (Li.isNaN()) {
+                Log(ELogLevel::EDebug, "fuck3");
+                break;
+            }
         }
         return Li;
     }
