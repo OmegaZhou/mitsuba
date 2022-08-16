@@ -24,13 +24,12 @@ MTS_NAMESPACE_BEGIN
 static StatsCounter avgPathLength("Path tracer", "Average path length", EAverage);
 struct PathItem
 {
-    PathItem() : m_throughput(0.0f), m_driectLightValue(0.0f), m_lightBsdfValue(0.0f), m_lightWeight(0.0f), m_hitLightValue(0.0f), m_hitLightWeight(0.0f), m_bsdfValue(0.0f),
-        m_lightWo(0.0f), m_bsdfWo(0.0f), m_otherLightValue(0.f), m_bsdfPdf(0.0f), m_useLightBsdfPdf(false), m_useHitLightPdf(false), m_itsIsEmitter(false), rRecType(0), m_intersection(), m_ray()
+    PathItem() : m_nextQ(1.0f), m_throughput(0.0f), m_driectLightValue(0.0f), m_lightBsdfValue(0.0f), m_lightWeight(0.0f), m_hitLightValue(0.0f), m_hitLightWeight(0.0f), m_bsdfValue(0.0f),
+        m_lightWo(0.0f), m_bsdfWo(0.0f), m_otherLightValue(0.f), m_bsdfPdf(0.0f), m_useLightBsdfPdf(false), m_useHitLightPdf(false), m_lightUpdateFlag(false), rRecType(0), m_intersection(), m_ray()
     {
 
     }
     Spectrum m_throughput;
-    Spectrum m_originThroughput;
 
     Spectrum m_driectLightValue;
     Float m_lightWeight;
@@ -39,7 +38,6 @@ struct PathItem
     Spectrum m_hitLightValue;
     Float m_hitLightWeight;
     Spectrum m_bsdfValue;
-    Spectrum m_originBsdfValue;
     Float m_bsdfPdf;
 
     Vector3 m_lightWo;
@@ -50,11 +48,12 @@ struct PathItem
     Intersection m_intersection;
     RayDifferential m_ray;
     float m_eta;
+    Float m_nextQ;
     int rRecType;
     bool m_scattered;
     bool m_useLightBsdfPdf;
     bool m_useHitLightPdf;
-    bool m_itsIsEmitter;
+    bool m_lightUpdateFlag;
     
 };
 struct PathCache
@@ -62,23 +61,58 @@ struct PathCache
     bool m_bsdfUpdate;
     bool m_lightUpdate;
     bool m_isInit;
-    std::vector<PathItem> m_items;
-    PathCache() :m_bsdfUpdate(true), m_lightUpdate(true), m_isInit(false) {
 
+    
+    PathCache() :m_bsdfUpdate(true), m_lightUpdate(true), m_isInit(false), m_endLoc(0) {
+
+    }
+    PathItem& back()
+    {
+        if (m_endLoc==0) {
+            SLog(ELogLevel::EError, "Out of range");
+        }
+        return m_items[m_endLoc-1];
+    }
+    PathItem& operator[](size_t i) {
+        if (i >= m_endLoc) {
+            SLog(ELogLevel::EError, "Out of range");
+        }
+        return m_items[i];
+    }
+    const PathItem& operator[](size_t i)const {
+        if (i >= m_endLoc) {
+            SLog(ELogLevel::EError, "Out of range");
+        }
+        return m_items[i];
+    }
+    int size()const {
+        return m_endLoc;
+    }
+    void setEnding(int endLoc)
+    {
+        m_endLoc = endLoc;
     }
     void addItem()
     {
-        m_items.push_back(PathItem());
+        if (m_endLoc == m_items.size()) {
+            m_items.push_back(PathItem());
+        }
+        else {
+            m_items[m_endLoc] = PathItem();
+        }
+        ++m_endLoc;
     }
-
     void clear()
     {
-        m_items.clear();
+        m_endLoc = 0;
     }
     void init()
     {
-        m_items.reserve(8);
+        //m_items.reserve(8);
     }
+private:
+    int m_endLoc;
+    std::vector<PathItem> m_items;
 };
 class PathCacheManager
 {
@@ -89,7 +123,7 @@ public:
     }
     static void updateStatus(unsigned int width, unsigned int height, unsigned int sampleNum,bool bsdfUpdate, bool lightUpdate) {
         auto& manager = getInstance();
-        if (!manager.m_isInit) {
+        if ((!manager.m_isInit)||(width!=manager.m_width||height!=manager.m_height||sampleNum!=manager.m_sampleNum)) {
             manager.m_cache.resize(width);
             for (int i = 0; i < width; ++i) {
                 manager.m_cache[i].resize(height);
@@ -97,16 +131,23 @@ public:
                     manager.m_cache[i][j].resize(sampleNum);
                 }
             }
-            manager.m_isInit = true;
+            manager.m_width = width;
+            manager.m_height = height;
+            manager.m_sampleNum = sampleNum;
+            manager.m_isInit = false;
         }
         for (auto& items : manager.m_cache) {
             for (auto& item : items) {
                 for (auto& cache : item) {
                     cache.m_bsdfUpdate = cache.m_bsdfUpdate ? cache.m_bsdfUpdate : bsdfUpdate;
                     cache.m_lightUpdate = cache.m_lightUpdate ? cache.m_lightUpdate : lightUpdate;
+                    if (!manager.m_isInit) {
+                        cache.m_isInit = false;
+                    }
                 }
             }
         }
+        manager.m_isInit = true;
     }
     bool isInit() const{
         return m_isInit;
@@ -122,17 +163,18 @@ public:
         for (auto& vec : m_cache) {
             for (auto& v : vec) {
                 for (auto& item : v) {
-                    memory += item.m_items.size() * sizeof(PathItem);
+                    memory += item.size() * sizeof(PathItem);
                 }
             }
         }
         SLog(ELogLevel::EDebug, "Memory cost:%lf MB", memory / 1024.0 / 1024.0);
     }
 private:
-    PathCacheManager(): m_isInit(false) {
+    PathCacheManager(): m_isInit(false), m_width(0),m_height(0),m_sampleNum(0) {
 
     }
     bool m_isInit;
+    int m_width, m_height, m_sampleNum;
     std::vector<std::vector<std::vector<PathCache>>> m_cache;
 };
 /*! \plugin{path}{Path tracer}
@@ -233,7 +275,7 @@ public:
             lightUpdate = true;
         }
         PathCacheManager::updateStatus(m_width, m_height, m_sampleNum, bsdfUpdate, lightUpdate);
-        Log(ELogLevel::EDebug, "Update bsdf: %d  light: %d", (int)bsdfUpdate, (int)lightUpdate);
+        Log(ELogLevel::EDebug, "Update bsdf: %d  light: %d  rrdepth %d", (int)bsdfUpdate, (int)lightUpdate, m_rrDepth);
     }
 
     /// Unserialize from a binary data stream
@@ -245,25 +287,24 @@ public:
     Spectrum Li(const RayDifferential &r, RadianceQueryRecord &rRec, PathCache& cache) const {
 
         Spectrum Li(0.0f);
-
-        if (cache.m_bsdfUpdate && cache.m_lightUpdate) {
-            if (cache.m_isInit) {
+        if (!cache.m_isInit) {
+            Li = LiInit(r, rRec, cache);
+        }
+        else {
+            if (cache.m_bsdfUpdate && cache.m_lightUpdate) {
                 Li = LiWithTotalUpdate(r, rRec, cache);
             }
-            else {
-                Li = LiInit(r, rRec, cache);
+            else if (cache.m_bsdfUpdate && (!cache.m_lightUpdate)) {
+                Li = LiWithUpdateBsdf(r, rRec, cache);
             }
-            
+            else if ((!cache.m_bsdfUpdate) && (!cache.m_lightUpdate)) {
+                Li = LiWithoutUpdate(r, rRec, cache);
+            }
+            else if ((!cache.m_bsdfUpdate) && (cache.m_lightUpdate)) {
+                Li = LiWithUpdateLight(r, rRec, cache);
+            }
         }
-        else if (cache.m_bsdfUpdate && (!cache.m_lightUpdate)) {
-            Li = LiWithUpdateBsdf(cache);
-        }
-        else if ((!cache.m_bsdfUpdate) && (!cache.m_lightUpdate)) {
-            Li = LiWithoutUpdate(cache);
-        }
-        else if ((!cache.m_bsdfUpdate) && (cache.m_lightUpdate)) {
-            Li = LiWithUpdateLight(r, rRec, cache);
-        }
+
         cache.m_bsdfUpdate = false;
         cache.m_lightUpdate = false;
         cache.m_isInit = true;
@@ -400,17 +441,9 @@ private:
     {
         const Scene* scene = rRec.scene;
         Intersection& its = rRec.its;
+        bool flag = false;
         while (rRec.depth <= m_maxDepth || m_maxDepth < 0) {
-            cache.addItem();
-            auto& item = cache.m_items.back();
-            item.m_intersection = its;
-            item.m_ray = ray;
-            item.m_throughput = throughput;
-            item.m_originThroughput = throughput;
-            item.m_eta = eta;
-            item.m_scattered = scattered;
-            item.rRecType = rRec.type;
-            
+
             if (!its.isValid()) {
                 /* If no intersection could be found, potentially return
                    radiance from a environment luminaire if it exists */
@@ -418,11 +451,18 @@ private:
                     && (!m_hideEmitters || scattered)) {
                     auto value = scene->evalEnvironment(ray);
                     Li += throughput * value;
-                    cache.m_items.back().m_otherLightValue += value;
                 }
                 break;
             }
-            item.m_itsIsEmitter = its.isEmitter();
+            cache.addItem();
+            auto& item = cache.back();
+            item.m_intersection = its;
+            item.m_ray = ray;
+            item.m_throughput = throughput;
+            item.m_eta = eta;
+            item.m_scattered = scattered;
+            item.rRecType = rRec.type;
+            item.m_lightUpdateFlag = flag;
             const BSDF* bsdf = its.getBSDF(ray);
 
             /* Possibly include emitted radiance if requested */
@@ -505,7 +545,6 @@ private:
             Spectrum bsdfWeight = bsdf->sample(bRec, bsdfPdf, rRec.nextSample2D());
             item.m_bsdfWo = bRec.wo;
             item.m_bsdfValue = bsdfWeight;
-            item.m_originBsdfValue = bsdfWeight;
             item.m_bsdfPdf = bsdfPdf;
 
             if (bsdfWeight.isZero())
@@ -535,7 +574,7 @@ private:
             else {
                 /* Intersected nothing -- perhaps there is an environment map? */
                 const Emitter* env = scene->getEnvironmentEmitter();
-
+                //item.m_lightUpdateFlag |= true;
                 if (env) {
                     if (m_hideEmitters && !scattered)
                         break;
@@ -549,7 +588,7 @@ private:
                     break;
                 }
             }
-            item.m_itsIsEmitter |= hitEmitter;
+            item.m_lightUpdateFlag |= hitEmitter;
             /* Keep track of the throughput and relative
                refractive index along the path */
             throughput *= bsdfWeight;
@@ -585,10 +624,12 @@ private:
                    getting stuck (e.g. due to total internal reflection) */
 
                 Float q = std::min(throughput.max() * eta * eta, (Float)0.95f);
+                item.m_nextQ = q;
                 if (rRec.nextSample1D() >= q)
                     break;
                 throughput /= q;
             }
+            flag = false;
         }
     }
 
@@ -598,15 +639,19 @@ private:
         Spectrum Li(0.0f);
         int depth;
         auto scene = rRec.scene;
-        for (depth = 0; depth < cache.m_items.size(); ++depth) {
-            auto& item = cache.m_items[depth];
+        for (depth = 0; depth < cache.size(); ++depth) {
+            auto& item = cache[depth];
             auto& its = item.m_intersection;
             auto& throughput = item.m_throughput;
             auto& scattered = item.m_scattered;
             auto& ray = item.m_ray;
             //当击中光源或没击中物体时
             //由于光源更新，可能此时打中物体
-            if (item.m_itsIsEmitter||(!its.isValid())) {
+            if (item.m_lightUpdateFlag||(!its.isValid())) {
+                break;
+            }
+            if (throughput.isZero()) {
+                depth = cache.size();
                 break;
             }
             const BSDF* bsdf = its.getBSDF(ray);
@@ -646,22 +691,27 @@ private:
                     }
                 }
             }
-            // 若bsdf采样cache采样到了光源，则光源失效，因而不需要计算bsdf采样到光源的情况
+            // 若bsdf采样cache采样到了光源，则cache失效，因而不需要计算bsdf采样到光源的情况
         }
         
-        if (depth != cache.m_items.size() || cache.m_items.size() == 0) {
-            cache.m_items.erase(cache.m_items.begin() + depth, cache.m_items.end());
+        updateLight(r, rRec, cache, depth, Li);
+
+        return Li;
+    }
+    void updateLight(const RayDifferential& r, RadianceQueryRecord& rRec, PathCache& cache, int depth, Spectrum& Li) const 
+    {
+
+        if (depth != cache.size() || cache.size() == 0) {
             Spectrum throughput(1.0f);
             Float eta = 1.0f;
             RayDifferential ray(r);
             bool scattered = false;
-
             if (depth == 0) {
                 rRec.rayIntersect(ray);
                 ray.mint = Epsilon;
             }
             else {
-                auto& item = cache.m_items[depth - 1];
+                auto& item = cache[depth];
                 rRec.depth = depth;
                 throughput = item.m_throughput;
                 eta = item.m_eta;
@@ -669,11 +719,12 @@ private:
                 ray = item.m_ray;
                 rRec.its = item.m_intersection;
                 rRec.type = item.rRecType;
+                rRec.dist = item.m_intersection.t;
             }
+            cache.setEnding(depth);
             LiLoop(r, rRec, cache, ray, scattered, throughput, Li, eta);
         }
 
-        return Li;
     }
     Spectrum LiInit(const RayDifferential& r, RadianceQueryRecord& rRec, PathCache& cache) const
     {
@@ -706,13 +757,24 @@ private:
 
         return Li;
     }
-    Spectrum LiWithUpdateBsdf(PathCache& cache) const
+    Spectrum LiWithUpdateBsdf(const RayDifferential& r, RadianceQueryRecord& rRec, PathCache& cache) const
     {
         Spectrum Li(0.0f);
+        if (cache.size() == 0) {
+            RayDifferential ray(r);
+            auto scene = rRec.scene;
+            bool scattered = false;
+            if ((rRec.type & RadianceQueryRecord::EEmittedRadiance)
+                && (!m_hideEmitters || scattered)) {
+                auto value = scene->evalEnvironment(ray);
+                Li += value;
+            }
+        }
+        bool flag = false;
         // 假定bsdf只改变参数的情况下，对bsdf采样的分布函数影响不大，因此可以直接使用原重要性权重
         // 重要性权重只影响蒙特卡洛积分方差，不改变期望
-        for (int i = 0; i < cache.m_items.size(); ++i) {
-            auto& item = cache.m_items[i];
+        for (int i = 0; i < cache.size(); ++i) {
+            auto& item = cache[i];
             auto& its = item.m_intersection;
             auto& throughput = item.m_throughput;
 
@@ -721,7 +783,10 @@ private:
             if (!its.isValid()) {
                 break;
             }
-
+            if (throughput.isZero()) {
+                i = cache.size();
+                break;
+            }
             const BSDF* bsdf = its.getBSDF(ray);
 
             
@@ -754,14 +819,17 @@ private:
                 BSDFSamplingRecord bRec(its, item.m_bsdfWo, ERadiance);
                 Spectrum bsdfWeight = bsdf->eval(bRec) / item.m_bsdfPdf;
                 Spectrum value = item.m_hitLightValue;
+                Li += bsdfWeight * throughput * value * item.m_hitLightWeight;
+                if (i + 1 != cache.size()) {
+                    cache[i + 1].m_throughput = throughput * bsdfWeight / item.m_nextQ;
+                    if (cache[i + 1].m_throughput.isNaN()) {
+                        auto s = throughput.toString();
+                    }
+                }
+                item.m_bsdfValue = bsdfWeight;
                 if (bsdfWeight.isZero()) {
                     break;
                 }
-                Li += bsdfWeight * throughput * value * item.m_hitLightWeight;
-                if (i + 1 != cache.m_items.size() && (!item.m_bsdfValue.isZero())) {
-                    cache.m_items[i + 1].m_throughput = cache.m_items[i + 1].m_originThroughput * bsdfWeight / item.m_originBsdfValue;
-                }
-                item.m_bsdfValue = bsdfWeight;
             }
             //if (Li.isNaN()) {
             //    Log(ELogLevel::EDebug, "fuck2");
@@ -778,15 +846,19 @@ private:
         // 重要性权重只影响蒙特卡洛积分方差，不改变期望
         int depth;
         auto scene = rRec.scene;
-        for (depth = 0; depth < cache.m_items.size(); ++depth) {
-            auto& item = cache.m_items[depth];
+        for (depth = 0; depth < cache.size(); ++depth) {
+            auto& item = cache[depth];
             auto& its = item.m_intersection;
-            auto& throughput = item.m_throughput;
-            auto& scattered = item.m_scattered;
-            auto& ray = item.m_ray;
+            const auto& throughput = item.m_throughput;
+            const auto& scattered = item.m_scattered;
+            const auto& ray = item.m_ray;
             //当击中光源或没击中物体时
             //由于光源更新，可能此时打中物体
-            if (item.m_itsIsEmitter || (!its.isValid())) {
+            if (item.m_lightUpdateFlag || (!its.isValid())) {
+                break;
+            }
+            if (throughput.isZero()) {
+                depth = cache.size();
                 break;
             }
             const BSDF* bsdf = its.getBSDF(ray);
@@ -841,46 +913,42 @@ private:
             if (!item.m_bsdfWo.isZero()) {
                 BSDFSamplingRecord bRec(its, item.m_bsdfWo, ERadiance);
                 Spectrum bsdfWeight = bsdf->eval(bRec) / item.m_bsdfPdf;
+                Spectrum value = item.m_hitLightValue;
+                Li += bsdfWeight * throughput * value * item.m_hitLightWeight;
+                if (depth + 1 != cache.size()) {
+                    cache[depth + 1].m_throughput = cache[depth].m_throughput * bsdfWeight / item.m_nextQ;
+                }
+                item.m_bsdfValue = bsdfWeight;
                 if (bsdfWeight.isZero()) {
                     break;
                 }
-                if (depth + 1 != cache.m_items.size()) {
-                    cache.m_items[depth + 1].m_throughput = cache.m_items[depth + 1].m_originThroughput*bsdfWeight / item.m_originBsdfValue;
-                }
-                item.m_bsdfValue = bsdfWeight;
+                
             }
         }
-        if (depth != cache.m_items.size() || cache.m_items.size()==0) {
-            cache.m_items.erase(cache.m_items.begin() + depth, cache.m_items.end());
-            Spectrum throughput(1.0f);
-            Float eta = 1.0f;
-            RayDifferential ray(r);
-            bool scattered = false;
-
-            if (depth == 0) {
-                rRec.rayIntersect(ray);
-                ray.mint = Epsilon;
-            }
-            else {
-                auto& item = cache.m_items[depth - 1];
-                rRec.depth = depth;
-                throughput = item.m_throughput;
-                eta = item.m_eta;
-                scattered = item.m_scattered;
-                ray = item.m_ray;
-                rRec.its = item.m_intersection;
-                rRec.type = item.rRecType;
-            }
-            LiLoop(r, rRec, cache, ray, scattered, throughput, Li, eta);
-        }
+        updateLight(r, rRec, cache, depth, Li);
         return Li;
     }
-    Spectrum LiWithoutUpdate(const PathCache& cache) const
+    Spectrum LiWithoutUpdate(const RayDifferential& r, RadianceQueryRecord& rRec, PathCache& cache) const
     {
         Spectrum Li(0.0f);
-        for (int i = 0; i < cache.m_items.size(); ++i) {
-            auto& item = cache.m_items[i];
+
+        if (cache.size() == 0) {
+            RayDifferential ray(r);
+            auto scene = rRec.scene;
+            bool scattered = false;
+            if ((rRec.type & RadianceQueryRecord::EEmittedRadiance)
+                && (!m_hideEmitters || scattered)) {
+                auto value = scene->evalEnvironment(ray);
+                Li += value;
+            }
+        }
+        for (int i = 0; i < cache.size(); ++i) {
+            auto& item = cache[i];
             auto& throughput = item.m_throughput;
+            if (throughput.isZero()) {
+                i = cache.size();
+                break;
+            }
             Li += throughput * item.m_otherLightValue;
             if (Li.isNaN()) {
                 auto str1 = throughput.toString();
